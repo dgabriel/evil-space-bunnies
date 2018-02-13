@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: "Lucida Console", Monaco, monospace}
+        canvas { background-color: black }
+    </style>
+    <meta charset="utf-8">
+</head>
+<body>
+
+    <center>
+        <canvas width="600" height="400" id="canvas"></canvas>
+    </center>
+
+
+    <b>TODO</b>
+    <ul>
+        <li>Add energy bar</li>
+        <li>Add "you've been hit" asplode</li>
+        <li>Add level up screen</li>
+        <li>Add blitz mode</li>
+        <li>Add power-ups: shield, energy-up</li>
+    </ul>
+
+    <script>
+        //there are lots of game objects to keep track of
+        var GameObject = function(id, goType, pos, asplode) {
+            this.id = id;
+            this.goType = goType;
+            this.pos = (pos) || {x:0, y:0};
+            this.direction = goType.direction || {v:0,h:0};
+            this.speed = goType.speed;
+            this.duration = goType.duration || null;
+            this.asplode = asplode;
+            this.frameIndex = 0;
+
+            this.newPos = goType.newPos || function() {
+                var x = this.pos.x + (this.speed * this.direction.h);
+                var y = this.pos.y + (this.speed * this.direction.v);
+
+                return {"x":x, "y":y};
+            };
+
+            this.newFrame = function() {
+                if ((this.goType.frames.length == 1) || (this.frameIndex == this.goType.frames.length-1))
+                    return 0;
+                else
+                    return this.frameIndex + 1;
+            };
+
+            this.draw = goType.draw || function(ctx) {
+                ctx.font = this.goType.font;
+                ctx.fillStyle = this.goType.color;
+
+                //handle multi-line text, if necessary
+                var lines = this.goType.frames[this.frameIndex].split(',');
+                var posY = this.pos.y;
+                var lineH = parseInt(this.goType.font.replace(/\D/g,''));
+
+                for (var line in lines) {
+                    ctx.fillText(lines[line], this.pos.x, posY);
+                    posY = posY + lineH;
+                }
+            };
+        }
+
+        //types of objects:
+        var missile = {
+            frames : ['.'],
+            color: 'yellow',
+            font: '24px courier',
+            name: 'missile',
+            speed: 15,
+            width: 16,
+            height: 16,
+            direction: {v: -1, h:0}
+        };
+
+        var baddy = {
+            frames : [' \\/ , oo ,^^^^'],
+            color: 'green',
+            font: '16px courier',
+            name: 'baddy',
+            speed: 4,
+            width: 38,
+            height: 25,
+            direction: {v: 1, h:0}
+        };
+
+        var bigBad = {
+            frames: ['    \\/   ,'+
+                    '   |oo|  ,'+
+                    '  >/VV\\< ,'+
+                    ' >|    |<,'+
+                    '   \\__/  ',
+                        '    \\/   ,'+
+                        '   |oo|  ,'+
+                        '  =/VV\\= ,'+
+                        ' =|    |=,'+
+                        '   \\__/  '],
+            color: 'red',
+            font: '16px courier',
+            name: 'bigbaddy',
+            speed: 8,
+            width: 48,
+            height: 50,
+            direction: {v: 0, h:1}
+
+        }
+
+        var asplosion = {
+            frames: ['BOOM!!'],
+            color: 'red',
+            font: '16px courier',
+            name: 'asplosion',
+            speed: 0,
+            direction: {v: 0, h:0},
+            duration: 15
+        };
+
+        var bigBadBoom = {
+            frames: ['DEAD BOSS 20pts!!'],
+            color: 'red',
+            font: '16px courier',
+            name: 'bigBadBoom',
+            speed: 0,
+            direction: {v: 0, h:0},
+            duration: 15
+        };
+
+        var base = {
+            frames : ['  _, /o\\,<===>,|___|,/ | \\'],
+            color: 'white',
+            font: '16px courier',
+            name: 'base',
+            speed: 20,
+            width: 57,
+            height: 32,
+            newPos: function(width, height) {
+                if (this.lefting && this.pos.x >0) {
+                    this.pos.x = this.pos.x - this.goType.speed;
+                } else if (this.righting && this.pos.x < width - 80) {
+                    this.pos.x = this.pos.x + this.goType.speed;
+                }
+
+                if (this.upping && this.pos.y > 0) {
+                    this.pos.y = this.pos.y - this.goType.speed;
+
+                } else if (this.downing && this.pos.y < height-(this.goType.height*2)) {
+                    this.pos.y = this.pos.y + this.goType.speed;
+                }
+            }
+        };
+
+        var background = {
+            frames : ['                                 _______                             ,'+
+                    '                 ___            /       \\              __            ,'+
+                    '________________/   \\__________/         \\____________/  \\___________'],
+            color: 'gray',
+            font: '16px courier',
+            name: 'background',
+            speed: 0,
+            direction: {v: 0, h:0}
+        }
+
+        var Game = {
+            width : 600,
+            height: 400,
+            frameRate: 60,
+            baddyCt: 3,
+            baddyDelay: 600,
+            lastBadDeploy: 0,
+            level: 1,
+            levelUpScore: 25,
+            gameObjs : [],
+            idCounter: 1,
+            energy: 10,
+            score: 0,
+            lives: 1,
+            started: false,
+            title: '  EVIL SPACE BAD GUYS!',
+            bg: null,
+
+            doLoop: function() {
+                Game.ctx.clearRect ( 0 , 0 , Game.canvas.width, Game.canvas.height );
+
+                Game.drawStats();
+                Game.bg.draw(Game.ctx);
+                Game.base.draw(Game.ctx);
+                Game.base.newPos(Game.width, Game.height);
+
+                if (Game.lives <= 0) {
+                    Game.gameObjs.splice(1);
+                    Game.gameOver();
+                }
+
+                var baddies = 0;
+                for (var i = 0; i < Game.gameObjs.length; i++) {
+                    var go = Game.gameObjs[i];
+                    go.draw(Game.ctx);
+
+                    Game.gameObjs[i].pos = go.newPos();
+                    Game.gameObjs[i].frameIndex = go.newFrame();
+
+                    if (go.goType.name.indexOf('bad') > -1) {
+                        baddies++;
+                        //did this bad guy hit me?
+                        if (Game.checkCollision(Game.base, go)) {
+                            Game.gameObjs.splice(i, 1);
+                            Game.energy = Game.energy - 1;
+
+                            //big bad kills an extra 2 energy:
+                            if (go.goType.name == 'bigBad') {
+                                Game.energy = Game.energy - 2;
+                            }
+                            if (Game.energy == 0)
+                                Game.lives = Game.lives - 1;
+                        }
+
+                        //did I hit this bad guy???
+                        for (var j = 0; j < Game.gameObjs.length; j++) {
+                            if (Game.gameObjs[j].goType.name == 'missile' ) {
+                                //check for collision
+                                if (Game.checkCollision(go, Game.gameObjs[j])) {
+                                    //remove the projectile, add bad guy asplodes
+                                    Game.gameObjs.splice(i, 1);
+                                    Game.gameObjs.splice(j, 1);
+                                    Game.gameObjs.push(new GameObject(i, go.asplode, {x: go.pos.x, y: go.pos.y}));
+                                    //the higher your ship is, the better the score.
+                                    Game.score = Game.score + Math.floor((10/Game.base.pos.y)*100);
+                                    //big bad adds an extra 20 points:
+                                    if (go.goType.name == 'bigBad') {
+                                        Game.score = Game.score +20;
+                                    }
+
+                                    if (Game.score/Game.levelUpScore >= Game.level) {
+                                        Game.level = Game.level+1;
+                                        Game.gameObjs.push(new GameObject(i, bigBad, {x: 0, y: Game.base.pos.y}, bigBadBoom));
+                                    }
+                                }
+
+                            }
+                        }
+
+                    }
+
+                    if (go.duration != null) {
+                        if (go.duration-1 == 0) {
+                            Game.gameObjs.splice(i, 1);
+                        } else {
+                            Game.gameObjs[i].duration = go.duration-1;
+                        }
+                    }
+
+                    if (go.goType.name != 'base' && !Game.isOnScreen(go.pos)) {
+                        //remove from array
+                        Game.gameObjs.splice(i, 1);
+                        if (go.goType.name.indexOf('bad') > -1) {
+                            //lose a point when the bad guys go off screen without dying:
+                            Game.score = Game.score - 1;
+                        }
+                    }
+                }
+
+                //add more baddies:
+                var delay = (Game.level * 10 < Game.baddyDelay) ? Game.baddyDelay - Game.level*10 : 0;
+                if (baddies < Game.level) {
+                    Game.addBadGuys();
+                    Game.lastBadDeploy = 0;
+                } else {
+                    Game.lastBadDeploy = (delay > 0) ? Game.lastBadDeploy + delay + Game.frameRate : 0;
+                }
+            },
+
+            isOnScreen: function(pos) {
+                return (pos.x >= 0 && pos.x < this.width) && (pos.y >= 0 && pos.y < this.height);
+            },
+
+            checkCollision: function(go1, go2) {
+                //get the coordinates!
+                var go1X = go1.pos.x;
+                var go1W = go1.goType.width;
+                var go1Y = go1.pos.y;
+                var go1H = go1.goType.height;
+
+                var go2X = go2.pos.x;
+                var go2W = go2.goType.width;
+                var go2Y = go2.pos.y;
+                var go2H = go2.goType.height;
+
+                //lets see who is in bounds!
+                if (go1X < go2X + go2W &&
+                        go1X + go1W > go2X &&
+                        go1Y < go2Y + go2H &&
+                        go1H + go1Y > go2Y) {
+                    return true;
+                }
+
+
+            },
+
+            addBadGuys: function() {
+                var randInit = Math.floor((Math.random() * Game.baddyCt+Game.level) + 1);
+                for (var i = 0; i < randInit; i++) {
+                    var randX = Math.floor((Math.random() * (Game.width-110)) + 5);
+                    this.gameObjs.push(new GameObject(i, baddy, {x: randX, y: 10}, asplosion));
+                }
+            },
+
+            init : function(canvas) {
+                //set canvas:
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+
+                //add the background
+                this.bg = new GameObject(0, background, {x: 1, y: this.height - 50});
+                this.bg.draw(this.ctx);
+
+                //run title sequence
+                Game.ctx.font = '16px courier';
+                Game.ctx.fillStyle = 'white';
+                Game.ctx.fillText(this.title, (this.width/2)-125, this.height/2);
+                Game.ctx.fillText('PRESS ENTER KEY TO START', (this.width/2)-130, this.height/2+40);
+
+
+                //the score and lives meters!
+                this.drawStats();
+
+                //the BASE
+                this.base = new GameObject(0, base, {x: (this.width/2)-40, y: this.height - 80});
+                this.base.lefting = false;
+                this.base.righting = false;
+                this.base.upping = false;
+                this.base.downing = false;
+
+                window.addEventListener('keydown', function(k) {
+                    if (k.keyCode == 13) {
+                        Game.start();
+                    }
+                });
+
+                this.initBaseKeyboardEvents();
+                this.initBaseTouchEvents();
+            },
+
+            drawStats: function() {
+                var scoreText = 'SCORE: '+ Game.score;
+                var energyText = 'LEVEL: '+ Game.level;
+                var levelText = 'ENERGY: '+ Game.energy;
+                this.ctx.font = '16px courier';
+                this.ctx.fillStyle = 'blue';
+
+                this.ctx.fillText(levelText, 500, 40);
+                this.ctx.fillText(energyText, 500, 60);
+                this.ctx.fillText(scoreText, 500, 20);
+            },
+
+            start: function() {
+                if (this.started == false) {
+                    this.started = true;
+                    this.score = 0;
+                    this.level = 1;
+                    this.lives = 1;
+
+                    //start the game loop
+                    this.intervalID = window.setInterval(Game.doLoop, Game.frameRate);
+                }
+            },
+
+            gameOver: function() {
+                window.clearInterval(Game.intervalID);
+                Game.intervalID = null;
+
+                Game.ctx.font = '24px courier';
+                Game.ctx.fillStyle = 'red';
+                Game.ctx.fillText('   GAME OVER ', (this.width/2)-125, this.height/2-60);
+
+                Game.ctx.font = '20px courier';
+                Game.ctx.fillStyle = 'blue';
+                Game.ctx.fillText('  FINAL SCORE '+Game.score, (this.width/2)-125, this.height/2-30);
+
+                Game.ctx.font = '16px courier';
+                Game.ctx.fillStyle = 'white';
+                Game.ctx.fillText(Game.title, (this.width/2)-125, this.height/2);
+                Game.ctx.fillText(' PRESS ENTER KEY TO START', (this.width/2)-130, this.height/2+40);
+
+                Game.started = false;
+                Game.base.lefting = false;
+                Game.base.righting = false;
+                Game.base.upping = false;
+                Game.base.downing = false;
+            },
+
+            initBaseTouchEvents: function() {
+
+            },
+
+            initBaseKeyboardEvents: function() {
+                //add keyboard events
+                //  these handle the movement of the base,
+                //  and the fire bullets! function
+
+                window.addEventListener('keydown', function(k) {
+                    if (Game.started == true) {
+                        switch (k.keyCode) {
+                            case 32:
+                                var missileX = Game.base.pos.x + 22;
+                                var missileY = Game.base.pos.y - 15;
+                                Game.gameObjs.push(new GameObject(Game.gameObjs.length, missile, {x: missileX, y: missileY}));
+                                break;
+                            case 37:
+                                Game.base.lefting = true;
+                                break;
+                            case 38:
+                                Game.base.upping = true;
+                                break;
+                            case 39:
+                                Game.base.righting = true;
+                                break;
+                            case 40:
+                                Game.base.downing = true;
+                                break;
+                            case 27:
+                                //esc key pauses the game!
+                                if (!Game.intervalID) {
+                                    Game.intervalID = window.setInterval(Game.doLoop, 30);
+                                } else {
+                                    window.clearInterval(Game.intervalID);
+                                    Game.intervalID = null;
+                                    window.debugGame = Game.gameObjs;
+                                }
+                        }
+                    }
+                });
+
+                window.addEventListener('keyup', function(k) {
+                    if (Game.started == true) {
+                        switch (k.keyCode) {
+                            case 37:
+                                Game.base.lefting = false;
+                                break;
+                            case 38:
+                                Game.base.upping = false;
+                                break;
+                            case 39:
+                                Game.base.righting = false;
+                                break;
+                            case 40:
+                                Game.base.downing = false;
+                                break;
+                        }
+                    }
+                });
+
+
+            }
+        };
+        document.addEventListener("DOMContentLoaded", function(event) {
+            var canvas = document.getElementById('canvas');
+            Game.init(canvas);
+        });
+    </script>
+
+</body>
+</html>
