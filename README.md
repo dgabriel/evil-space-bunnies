@@ -1,2 +1,2 @@
 # evil-space-bunnies
-a very silly vanilla js game.
+A very silly game written entirely in Vanilla JS.
